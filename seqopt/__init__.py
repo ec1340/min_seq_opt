@@ -19,6 +19,21 @@ except ModuleNotFoundError:
     pass
 
 try:
+    from .plotting import plot_bar, plot_histogram, plot_length_curve, plot_trajectory
+
+    __all__.extend(
+        [
+            "plot_trajectory",
+            "plot_bar",
+            "plot_length_curve",
+            "plot_histogram",
+        ]
+    )
+except ModuleNotFoundError:
+    # matplotlib is optional for plotting helpers.
+    pass
+
+try:
     from .algorithm import run_optimization
     from .inference import load_regressor, predict_batch, predict_from_strings
     from .model import BindingRegressor, encode_from_strings, encode_sequences
