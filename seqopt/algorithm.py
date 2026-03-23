@@ -74,11 +74,39 @@ def run_optimization(
     device: str | None = None,
 ) -> dict:
     """Run one optimization trajectory and return per-step outputs."""
+    return run_optimization_batch(
+        model=model,
+        init_ligands=[init_ligand],
+        config=config,
+        gradient_config=gradient_config,
+        target_sequence=target_sequence,
+        antitarget_sequence=antitarget_sequence,
+        device=device,
+    )[0]
+
+
+def run_optimization_batch(
+    model: BindingRegressor,
+    init_ligands: list[str],
+    config: OptimizationConfig | None = None,
+    gradient_config: GradientConfig | None = None,
+    target_sequence: str = TARGET,
+    antitarget_sequence: str = ANTITARGET,
+    device: str | None = None,
+) -> list[dict]:
+    """Run optimization for multiple ligands in one batched forward pass."""
     config = config or OptimizationConfig()
     gradient_config = gradient_config or GradientConfig()
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     torch_device = torch.device(device)
+    if not init_ligands:
+        raise ValueError("init_ligands must contain at least one sequence.")
+    ligand_len = len(init_ligands[0])
+    if ligand_len == 0:
+        raise ValueError("Ligand sequences must be non-empty.")
+    if any(len(ligand) != ligand_len for ligand in init_ligands):
+        raise ValueError("All ligands in init_ligands must have the same length for batched optimization.")
 
     model = model.to(torch_device)
     model.eval()
@@ -86,21 +114,21 @@ def run_optimization(
         param.requires_grad_(False)
 
     num_steps = config.num_steps
-    ligand_len = len(init_ligand)
+    batch_size = len(init_ligands)
 
-    candidates: list[str] = []
-    target_preds: list[float] = []
-    antitarget_preds: list[float] = []
-    entropy_values: list[float] = []
-    entropy_weights: list[float] = []
-    phases: list[str] = []
+    candidates: list[list[str]] = [[] for _ in range(batch_size)]
+    target_preds: list[list[float]] = [[] for _ in range(batch_size)]
+    antitarget_preds: list[list[float]] = [[] for _ in range(batch_size)]
+    entropy_values: list[list[float]] = [[] for _ in range(batch_size)]
+    entropy_weights: list[list[float]] = [[] for _ in range(batch_size)]
+    phases: list[list[str]] = [[] for _ in range(batch_size)]
 
-    target_ids, target_mask = encode_from_strings(target_sequence, init_ligand)
-    anti_ids, anti_mask = encode_from_strings(antitarget_sequence, init_ligand)
-    target_ids = target_ids.unsqueeze(0).to(torch_device)
-    target_mask = target_mask.unsqueeze(0).to(torch_device)
-    anti_ids = anti_ids.unsqueeze(0).to(torch_device)
-    anti_mask = anti_mask.unsqueeze(0).to(torch_device)
+    target_encoded = [encode_from_strings(target_sequence, ligand) for ligand in init_ligands]
+    anti_encoded = [encode_from_strings(antitarget_sequence, ligand) for ligand in init_ligands]
+    target_ids = torch.stack([ids for ids, _ in target_encoded], dim=0).to(torch_device)
+    target_mask = torch.stack([mask for _, mask in target_encoded], dim=0).to(torch_device)
+    anti_ids = torch.stack([ids for ids, _ in anti_encoded], dim=0).to(torch_device)
+    anti_mask = torch.stack([mask for _, mask in anti_encoded], dim=0).to(torch_device)
 
     target_lig_start = 3 + len(target_sequence)
     target_lig_end = target_lig_start + ligand_len
@@ -110,16 +138,23 @@ def run_optimization(
     aa_embed_table = model.token_embedding.weight[:20].detach()
     target_base_token_embeds = model.token_embedding(target_ids).detach()
     anti_base_token_embeds = model.token_embedding(anti_ids).detach()
-    target_positions = torch.arange(target_ids.shape[1], device=torch_device).unsqueeze(0)
-    anti_positions = torch.arange(anti_ids.shape[1], device=torch_device).unsqueeze(0)
+    target_positions = torch.arange(target_ids.shape[1], device=torch_device).unsqueeze(0).expand(batch_size, -1)
+    anti_positions = torch.arange(anti_ids.shape[1], device=torch_device).unsqueeze(0).expand(batch_size, -1)
     target_pos_embeds = model.pos_embedding(target_positions).detach()
     anti_pos_embeds = model.pos_embedding(anti_positions).detach()
+    sqrt_d_model = math.sqrt(model.d_model)
 
-    logits = _initial_logits(
-        init_ligand=init_ligand,
-        device=torch_device,
-        init_bias=config.init_bias,
-        noise_scale=config.init_noise_scale,
+    logits = torch.stack(
+        [
+            _initial_logits(
+                init_ligand=ligand,
+                device=torch_device,
+                init_bias=config.init_bias,
+                noise_scale=config.init_noise_scale,
+            )
+            for ligand in init_ligands
+        ],
+        dim=0,
     ).requires_grad_()
     optimizer = torch.optim.Adam([logits], lr=config.lr)
 
@@ -130,21 +165,33 @@ def run_optimization(
         soft_ligand_embeds.retain_grad()
 
         target_token_embeds = target_base_token_embeds.clone()
-        target_token_embeds[0, target_lig_start:target_lig_end, :] = soft_ligand_embeds
-        target_token_embeds = target_token_embeds * math.sqrt(model.d_model)
-        x_target = target_token_embeds + target_pos_embeds
-        x_target = model.transformer(x_target, src_key_padding_mask=target_mask)
-        pred_target = model.head(x_target[:, 0, :]).squeeze(-1)
+        target_token_embeds[:, target_lig_start:target_lig_end, :] = soft_ligand_embeds
 
         anti_token_embeds = anti_base_token_embeds.clone()
-        anti_token_embeds[0, anti_lig_start:anti_lig_end, :] = soft_ligand_embeds
-        anti_token_embeds = anti_token_embeds * math.sqrt(model.d_model)
-        x_anti = anti_token_embeds + anti_pos_embeds
-        x_anti = model.transformer(x_anti, src_key_padding_mask=anti_mask)
-        pred_anti = model.head(x_anti[:, 0, :]).squeeze(-1)
+        anti_token_embeds[:, anti_lig_start:anti_lig_end, :] = soft_ligand_embeds
 
-        grad_target = torch.autograd.grad(pred_target, soft_ligand_embeds, retain_graph=True)[0]
-        grad_anti = torch.autograd.grad(pred_anti, soft_ligand_embeds, retain_graph=True)[0]
+        joint_token_embeds = torch.cat([target_token_embeds, anti_token_embeds], dim=0) * sqrt_d_model
+        joint_pos_embeds = torch.cat([target_pos_embeds, anti_pos_embeds], dim=0)
+        joint_mask = torch.cat([target_mask, anti_mask], dim=0)
+        joint_x = joint_token_embeds + joint_pos_embeds
+        joint_x = model.transformer(joint_x, src_key_padding_mask=joint_mask)
+        joint_preds = model.head(joint_x[:, 0, :]).squeeze(-1)
+        pred_target = joint_preds[:batch_size]
+        pred_anti = joint_preds[batch_size:]
+
+        ones = torch.ones_like(pred_target)
+        grad_target = torch.autograd.grad(
+            pred_target,
+            soft_ligand_embeds,
+            grad_outputs=ones,
+            retain_graph=True,
+        )[0]
+        grad_anti = torch.autograd.grad(
+            pred_anti,
+            soft_ligand_embeds,
+            grad_outputs=ones,
+            retain_graph=True,
+        )[0]
 
         phase = _phase_for_step(
             step=step,
@@ -152,7 +199,8 @@ def run_optimization(
             target_block_steps=config.target_block_steps,
             antitarget_block_steps=config.antitarget_block_steps,
         )
-        phases.append(phase)
+        for sample_phases in phases:
+            sample_phases.append(phase)
         if phase == "parallel":
             combined_grad = combine_gradients(grad_target, grad_anti, gradient_config, step=step, num_steps=num_steps)
         elif phase == "target_only":
@@ -164,7 +212,8 @@ def run_optimization(
                 torch.zeros_like(grad_target), grad_anti, gradient_config, step=step, num_steps=num_steps
             )
 
-        entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=-1).mean()
+        per_sample_entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=-1).mean(dim=-1)
+        entropy = per_sample_entropy.mean()
         entropy_weight = _scheduled_weight(
             base_weight=config.entropy_weight,
             step=step,
@@ -186,21 +235,27 @@ def run_optimization(
         optimizer.step()
 
         step_ids = logits.argmax(dim=-1)
-        step_ligand = "".join(AMINO_ACIDS[i] for i in step_ids.tolist())
-        candidates.append(step_ligand)
-        target_preds.append(float(pred_target.detach().item()))
-        antitarget_preds.append(float(pred_anti.detach().item()))
-        entropy_values.append(float(entropy.detach().item()))
-        entropy_weights.append(float(entropy_weight))
+        for idx, sample_ids in enumerate(step_ids.tolist()):
+            step_ligand = "".join(AMINO_ACIDS[i] for i in sample_ids)
+            candidates[idx].append(step_ligand)
+            target_preds[idx].append(float(pred_target[idx].detach().item()))
+            antitarget_preds[idx].append(float(pred_anti[idx].detach().item()))
+            entropy_values[idx].append(float(per_sample_entropy[idx].detach().item()))
+            entropy_weights[idx].append(float(entropy_weight))
 
-    return {
-        "candidates_traj": candidates,
-        "target_preds": target_preds,
-        "antitarget_preds": antitarget_preds,
-        "entropy_values": entropy_values,
-        "entropy_weights": entropy_weights,
-        "phases": phases,
-        "optimization_config": asdict(config),
-        "gradient_config": asdict(gradient_config),
-    }
+    optimization_config_dict = asdict(config)
+    gradient_config_dict = asdict(gradient_config)
+    return [
+        {
+            "candidates_traj": candidates[idx],
+            "target_preds": target_preds[idx],
+            "antitarget_preds": antitarget_preds[idx],
+            "entropy_values": entropy_values[idx],
+            "entropy_weights": entropy_weights[idx],
+            "phases": phases[idx],
+            "optimization_config": optimization_config_dict,
+            "gradient_config": gradient_config_dict,
+        }
+        for idx in range(batch_size)
+    ]
 

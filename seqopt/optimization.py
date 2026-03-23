@@ -118,3 +118,10 @@ def run_optimization(*args, **kwargs) -> dict:
 
     return _run_optimization(*args, **kwargs)
 
+
+def run_optimization_batch(*args, **kwargs) -> list[dict]:
+    """Backward-compatible import path for batched optimization."""
+    from .algorithm import run_optimization_batch as _run_optimization_batch
+
+    return _run_optimization_batch(*args, **kwargs)
+

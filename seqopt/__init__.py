@@ -34,7 +34,7 @@ except ModuleNotFoundError:
     pass
 
 try:
-    from .algorithm import run_optimization
+    from .algorithm import run_optimization, run_optimization_batch
     from .inference import load_regressor, predict_batch, predict_from_strings
     from .model import BindingRegressor, encode_from_strings, encode_sequences
     from .optimization import (
@@ -58,6 +58,7 @@ try:
             "predict_from_strings",
             "predict_batch",
             "run_optimization",
+            "run_optimization_batch",
             "summarize_result",
         ]
     )
