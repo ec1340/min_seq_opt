@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seqopt"
+version = "0.1.0"
+description = "Mini library for sequence optimization and ligand design."
+requires-python = ">=3.10"
+dependencies = [
+  "torch",
+  "requests",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["seqopt*"]
+
