@@ -306,3 +306,36 @@ def run_optimization_batch(
         for idx in range(batch_size)
     ]
 
+
+def run_optimization_chunked(
+    model: BindingRegressor,
+    init_ligands: list[str],
+    batch_size: int,
+    config: OptimizationConfig | None = None,
+    gradient_config: GradientConfig | None = None,
+    target_sequence: str = TARGET,
+    antitarget_sequence: str = ANTITARGET,
+    device: str | None = None,
+) -> list[dict]:
+    """Run optimization for many ligands by chunking into batched forwards."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be > 0")
+    if not init_ligands:
+        raise ValueError("init_ligands must contain at least one sequence.")
+
+    results: list[dict] = []
+    for start in range(0, len(init_ligands), batch_size):
+        ligand_batch = init_ligands[start : start + batch_size]
+        results.extend(
+            run_optimization_batch(
+                model=model,
+                init_ligands=ligand_batch,
+                config=config,
+                gradient_config=gradient_config,
+                target_sequence=target_sequence,
+                antitarget_sequence=antitarget_sequence,
+                device=device,
+            )
+        )
+    return results
+

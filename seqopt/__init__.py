@@ -1,7 +1,7 @@
 """seqopt: sequence optimization utilities for ligand design."""
 
 from .constants import AMINO_ACIDS, ANTITARGET, TARGET
-from .sampling import DEFAULT_WEIGHTED_CHOICES, sample_sequence
+from .sampling import DEFAULT_WEIGHTED_CHOICES, sample_sequence, sample_sequences
 
 __all__ = [
     "AMINO_ACIDS",
@@ -9,6 +9,7 @@ __all__ = [
     "TARGET",
     "DEFAULT_WEIGHTED_CHOICES",
     "sample_sequence",
+    "sample_sequences",
 ]
 
 try:
@@ -35,7 +36,7 @@ except ModuleNotFoundError:
     pass
 
 try:
-    from .algorithm import run_optimization, run_optimization_batch
+    from .algorithm import run_optimization, run_optimization_batch, run_optimization_chunked
     from .inference import load_regressor, predict_batch, predict_from_strings
     from .model import BindingRegressor, encode_from_strings, encode_sequences
     from .optimization import (
@@ -60,6 +61,7 @@ try:
             "predict_batch",
             "run_optimization",
             "run_optimization_batch",
+            "run_optimization_chunked",
             "summarize_result",
         ]
     )

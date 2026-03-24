@@ -127,3 +127,10 @@ def run_optimization_batch(*args, **kwargs) -> list[dict]:
 
     return _run_optimization_batch(*args, **kwargs)
 
+
+def run_optimization_chunked(*args, **kwargs) -> list[dict]:
+    """Backward-compatible import path for chunked batched optimization."""
+    from .algorithm import run_optimization_chunked as _run_optimization_chunked
+
+    return _run_optimization_chunked(*args, **kwargs)
+
