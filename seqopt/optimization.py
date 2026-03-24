@@ -32,6 +32,8 @@ class OptimizationConfig:
     entropy_min_frac: float = 0.0
     entropy_schedule: str = "linear_decay"
     entropy_mode: str = "max"
+    log_progress: bool = False
+    log_every: int = 10
 
 
 @dataclass

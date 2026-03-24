@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 from dataclasses import asdict
 
 import torch
@@ -11,6 +13,8 @@ import torch.nn.functional as F
 from .constants import AMINO_ACIDS, ANTITARGET, TARGET
 from .model import AA_TO_IDX, BindingRegressor, encode_from_strings
 from .optimization import GradientConfig, OptimizationConfig, combine_gradients
+
+logger = logging.getLogger(__name__)
 
 
 def _initial_logits(
@@ -64,6 +68,13 @@ def _scheduled_weight(
     return base_weight * multiplier
 
 
+def _emit_progress(message: str, *args: object) -> None:
+    if logger.isEnabledFor(logging.INFO):
+        logger.info(message, *args)
+    else:
+        print(message % args, flush=True)
+
+
 def run_optimization(
     model: BindingRegressor,
     init_ligand: str,
@@ -115,6 +126,8 @@ def run_optimization_batch(
 
     num_steps = config.num_steps
     batch_size = len(init_ligands)
+    if config.log_progress and config.log_every <= 0:
+        raise ValueError("log_every must be > 0 when log_progress is enabled.")
 
     candidates: list[list[str]] = [[] for _ in range(batch_size)]
     target_preds: list[list[float]] = [[] for _ in range(batch_size)]
@@ -157,6 +170,16 @@ def run_optimization_batch(
         dim=0,
     ).requires_grad_()
     optimizer = torch.optim.Adam([logits], lr=config.lr)
+    run_start = time.perf_counter()
+    if config.log_progress:
+        _emit_progress(
+            "Optimization start: mode=%s steps=%d batch_size=%d lr=%.4g device=%s",
+            config.optimization_mode,
+            num_steps,
+            batch_size,
+            config.lr,
+            torch_device,
+        )
 
     for step in range(num_steps):
         optimizer.zero_grad(set_to_none=True)
@@ -242,6 +265,30 @@ def run_optimization_batch(
             antitarget_preds[idx].append(float(pred_anti[idx].detach().item()))
             entropy_values[idx].append(float(per_sample_entropy[idx].detach().item()))
             entropy_weights[idx].append(float(entropy_weight))
+
+        should_log = config.log_progress and (
+            step == 0 or step == num_steps - 1 or ((step + 1) % config.log_every == 0)
+        )
+        if should_log:
+            steps_done = step + 1
+            elapsed = time.perf_counter() - run_start
+            avg_step_time = elapsed / max(steps_done, 1)
+            eta_seconds = max(num_steps - steps_done, 0) * avg_step_time
+            throughput = batch_size / max(avg_step_time, 1e-12)
+            _emit_progress(
+                "Step %d/%d phase=%s elapsed=%.1fs avg_step=%.3fs throughput=%.1f ligands/s eta=%.1fs "
+                "target_mean=%.4f anti_mean=%.4f entropy_mean=%.4f",
+                steps_done,
+                num_steps,
+                phase,
+                elapsed,
+                avg_step_time,
+                throughput,
+                eta_seconds,
+                float(pred_target.mean().detach().item()),
+                float(pred_anti.mean().detach().item()),
+                float(per_sample_entropy.mean().detach().item()),
+            )
 
     optimization_config_dict = asdict(config)
     gradient_config_dict = asdict(gradient_config)
