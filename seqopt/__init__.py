@@ -19,12 +19,13 @@ except ModuleNotFoundError:
     pass
 
 try:
-    from .plotting import plot_bar, plot_histogram, plot_length_curve, plot_trajectory
+    from .plotting import plot_bar, plot_histogram, plot_length_curve, plot_score_summary, plot_trajectory
 
     __all__.extend(
         [
             "plot_trajectory",
             "plot_bar",
+            "plot_score_summary",
             "plot_length_curve",
             "plot_histogram",
         ]

@@ -49,6 +49,53 @@ def plot_bar(labels: list[str], values: list[float], title: str, ylabel: str) ->
     plt.show()
 
 
+def plot_score_summary(
+    labels: list[str],
+    means: list[float],
+    stds: list[float] | None = None,
+    title: str = "Configuration comparison",
+    counts: list[int] | None = None,
+    sort_by_score: bool = True,
+) -> None:
+    """Plot score comparison with uncertainty and sample counts."""
+    n = len(labels)
+    if len(means) != n:
+        raise ValueError("labels and means must have the same length")
+    if stds is not None and len(stds) != n:
+        raise ValueError("stds must have the same length as labels")
+    if counts is not None and len(counts) != n:
+        raise ValueError("counts must have the same length as labels")
+    if n == 0:
+        raise ValueError("labels must be non-empty")
+
+    order = sorted(range(n), key=lambda i: means[i]) if sort_by_score else list(range(n))
+    labels_ord = [labels[i] for i in order]
+    means_ord = [means[i] for i in order]
+    stds_ord = [stds[i] for i in order] if stds is not None else None
+    counts_ord = [counts[i] for i in order] if counts is not None else None
+
+    plt = _get_pyplot()
+    y_pos = list(range(n))
+    fig, ax_score = plt.subplots(1, 1, figsize=(8.8, max(4.8, 0.55 * n + 2.2)))
+
+    ax_score.barh(y_pos, means_ord, xerr=stds_ord, capsize=4)
+    ax_score.set_yticks(y_pos)
+    ax_score.set_yticklabels(labels_ord)
+    ax_score.invert_yaxis()
+    ax_score.set_xlabel("Comparison score (lower is better)")
+    ax_score.set_title(title)
+    ax_score.grid(axis="x", alpha=0.3)
+
+    if counts_ord is not None:
+        x_span = max(abs(v) for v in means_ord) or 1.0
+        text_offset = 0.03 * x_span
+        for yi, (xval, count) in enumerate(zip(means_ord, counts_ord)):
+            ax_score.text(xval + text_offset, yi, f"n={count}", va="center", fontsize=9)
+
+    fig.tight_layout()
+    plt.show()
+
+
 def plot_length_curve(
     lengths: list[int],
     means: list[float],
